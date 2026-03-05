@@ -26,8 +26,8 @@ export const UserProfileSettings: React.FC<UserProfileSettingsProps> = ({ userPr
     if (user && profile.email !== user.email) {
       setProfile(prev => ({
         ...prev,
-        name: user.name,
-        email: user.email,
+        name: user.user_metadata?.name || user.email?.split('@')[0] || 'Usuário',
+        email: user.email || '',
         id: user.id
       }));
     }
