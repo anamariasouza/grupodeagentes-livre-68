@@ -1,7 +1,17 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { User, AuthContextType, defaultUser } from '@/types/auth';
-import { UserProfile, defaultUserProfile } from '@/types/user';
+import { supabase } from '@/integrations/supabase/client';
+import { Session, User } from '@supabase/supabase-js';
+
+interface AuthContextType {
+  user: User | null;
+  session: Session | null;
+  loading: boolean;
+  login: (email: string, password: string) => Promise<{ error: string | null }>;
+  register: (email: string, name: string, password: string) => Promise<{ error: string | null }>;
+  logout: () => Promise<void>;
+  isAuthenticated: boolean;
+}
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -15,115 +25,61 @@ export const useAuth = () => {
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Inicializar usuário padrão se não existir
-    const users = JSON.parse(localStorage.getItem('chathy-users') || '[]');
-    if (users.length === 0) {
-      localStorage.setItem('chathy-users', JSON.stringify([defaultUser]));
-    }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+      setLoading(false);
+    });
 
-    // Verificar se há uma sessão ativa e se ainda é válida (24h)
-    const currentUser = localStorage.getItem('chathy-current-user');
-    const sessionExpiry = localStorage.getItem('chathy-session-expiry');
-    
-    if (currentUser && sessionExpiry) {
-      const now = new Date().getTime();
-      const expiryTime = parseInt(sessionExpiry);
-      
-      if (now < expiryTime) {
-        // Sessão ainda válida
-        const userData = JSON.parse(currentUser);
-        setUser(userData);
-        syncUserProfile(userData);
-      } else {
-        // Sessão expirada, limpar
-        localStorage.removeItem('chathy-current-user');
-        localStorage.removeItem('chathy-session-expiry');
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+      setLoading(false);
+
+      // Update online status
+      if (session?.user) {
+        supabase.from('profiles').update({ status: 'online', last_seen: new Date().toISOString() })
+          .eq('id', session.user.id).then();
       }
-    }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  const syncUserProfile = (userData: User) => {
-    const userProfileKey = `${userData.id}-user-profile`;
-    const existingProfile = JSON.parse(localStorage.getItem(userProfileKey) || 'null');
-    
-    // Se não há perfil ou o perfil não corresponde ao usuário logado, criar/atualizar
-    if (!existingProfile || existingProfile.email !== userData.email) {
-      const userProfile: UserProfile = {
-        ...defaultUserProfile,
-        id: userData.id,
-        name: userData.name,
-        email: userData.email,
-        updatedAt: new Date()
-      };
-      localStorage.setItem(userProfileKey, JSON.stringify(userProfile));
-    }
+  const login = async (email: string, password: string) => {
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    return { error: error?.message ?? null };
   };
 
-  const login = async (email: string, password: string): Promise<boolean> => {
-    const users: User[] = JSON.parse(localStorage.getItem('chathy-users') || '[]');
-    const foundUser = users.find(u => u.email === email && u.password === password && u.isActive);
-    
-    if (foundUser) {
-      setUser(foundUser);
-      localStorage.setItem('chathy-current-user', JSON.stringify(foundUser));
-      
-      // Definir expiração da sessão para 24 horas
-      const expiryTime = new Date().getTime() + (24 * 60 * 60 * 1000);
-      localStorage.setItem('chathy-session-expiry', expiryTime.toString());
-      
-      syncUserProfile(foundUser);
-      return true;
-    }
-    return false;
-  };
-
-  const register = async (email: string, name: string, password: string): Promise<boolean> => {
-    const users: User[] = JSON.parse(localStorage.getItem('chathy-users') || '[]');
-    
-    // Verificar se o email já existe
-    if (users.some(u => u.email === email)) {
-      return false;
-    }
-
-    const newUser: User = {
-      id: `user-${Date.now()}`,
+  const register = async (email: string, name: string, password: string) => {
+    const { error } = await supabase.auth.signUp({
       email,
-      name,
       password,
-      createdAt: new Date(),
-      isActive: true
-    };
-
-    users.push(newUser);
-    localStorage.setItem('chathy-users', JSON.stringify(users));
-    
-    setUser(newUser);
-    localStorage.setItem('chathy-current-user', JSON.stringify(newUser));
-    
-    // Definir expiração da sessão para 24 horas
-    const expiryTime = new Date().getTime() + (24 * 60 * 60 * 1000);
-    localStorage.setItem('chathy-session-expiry', expiryTime.toString());
-    
-    syncUserProfile(newUser);
-    return true;
+      options: { data: { name } }
+    });
+    return { error: error?.message ?? null };
   };
 
-  const logout = () => {
-    setUser(null);
-    localStorage.removeItem('chathy-current-user');
-    localStorage.removeItem('chathy-session-expiry');
-    // Os dados específicos do usuário permanecem no localStorage para quando ele logar novamente
-    // O novo hook useUserStorage irá carregar os dados corretos automaticamente
+  const logout = async () => {
+    if (user) {
+      await supabase.from('profiles').update({ status: 'offline', last_seen: new Date().toISOString() })
+        .eq('id', user.id);
+    }
+    await supabase.auth.signOut();
   };
 
   const value: AuthContextType = {
     user,
+    session,
+    loading,
     login,
     register,
     logout,
-    isAuthenticated: !!user
+    isAuthenticated: !!session
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

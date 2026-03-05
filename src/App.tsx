@@ -12,7 +12,18 @@ import NotFound from "./pages/NotFound";
 const queryClient = new QueryClient();
 
 const AppContent = () => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-center">
+          <img src="/lovable-uploads/719cf256-e78e-410a-ac5a-2f514a4b8d16.png" alt="Chathy" className="w-16 h-16 mx-auto mb-4 rounded-full animate-pulse" />
+          <p className="text-muted-foreground">Carregando...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!isAuthenticated) {
     return <Login />;
